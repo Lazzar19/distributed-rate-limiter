@@ -56,9 +56,9 @@ func TestHandlerBurstAndHealth(t *testing.T) {
 	}
 }
 
-func TestNewHandlerRejectsRedis(t *testing.T) {
+func TestNewHandlerRequiresRedisAddress(t *testing.T) {
 	_, err := newHandler(config.Config{StorageBackend: config.BackendRedis}, nil)
-	if err == nil || !strings.Contains(err.Error(), "redis") {
+	if err == nil || !strings.Contains(err.Error(), "redis address") {
 		t.Fatalf("error = %v", err)
 	}
 }

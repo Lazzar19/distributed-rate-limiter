@@ -47,14 +47,29 @@ func main() {
 }
 
 func newHandler(cfg config.Config, now func() time.Time) (http.Handler, error) {
-	if cfg.StorageBackend != config.BackendMemory {
-		return nil, fmt.Errorf("STORAGE_BACKEND=%s is not available yet", cfg.StorageBackend)
+	store, err := newStore(cfg, now)
+	if err != nil {
+		return nil, err
 	}
-	store := storage.NewMemory(now)
 	limit := middleware.New(store, limiter.Policy{
 		Capacity:       cfg.Capacity,
 		RefillRate:     cfg.RefillRate,
 		RefillInterval: cfg.RefillInterval,
 	}, cfg.LimiterOnError == config.FailOpen, cfg.TrustedProxies, nil)
 	return api.NewMux(limit.Wrap(http.HandlerFunc(api.Resource))), nil
+}
+
+func newStore(cfg config.Config, now func() time.Time) (storage.Store, error) {
+	switch cfg.StorageBackend {
+	case config.BackendMemory:
+		return storage.NewMemory(now), nil
+	case config.BackendRedis:
+		return storage.NewRedis(storage.RedisConfig{
+			Addr:     cfg.RedisAddr,
+			Password: cfg.RedisPassword,
+			DB:       cfg.RedisDB,
+		})
+	default:
+		return nil, fmt.Errorf("STORAGE_BACKEND=%s is not available", cfg.StorageBackend)
+	}
 }
