@@ -98,6 +98,29 @@ func TestMemoryCanonicalRows(t *testing.T) {
 	})
 }
 
+func TestMemoryRefillsOnRealClock(t *testing.T) {
+	policy := limiter.Policy{Capacity: 5, RefillRate: 1, RefillInterval: time.Second}
+	store := NewMemory(nil)
+	drain(t, store, "client", policy, int(policy.Capacity))
+
+	denied, err := store.Allow(context.Background(), "client", policy)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if denied.Allowed {
+		t.Fatal("request immediately after the burst was allowed")
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	allowed, err := store.Allow(context.Background(), "client", policy)
+	if err != nil {
+		t.Fatalf("Allow after refill: %v", err)
+	}
+	if !allowed.Allowed {
+		t.Fatal("request after one refill interval was denied")
+	}
+}
+
 func TestMemoryClientsAreIndependent(t *testing.T) {
 	policy := samplePolicy()
 	store := NewMemory(func() time.Time { return time.Unix(0, 0).UTC() })
