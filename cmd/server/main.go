@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Lazzar19/distributed-rate-limiter/internal/api"
@@ -25,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler, err := newHandler(cfg, nil)
+	handler, release, err := newHandler(cfg, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
 		os.Exit(1)
@@ -38,38 +43,74 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shut); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+	}()
+
 	log.Printf("listening on %s backend=%s on_error=%s capacity=%g refill=%g/%s",
 		addr, cfg.StorageBackend, cfg.LimiterOnError, cfg.Capacity, cfg.RefillRate, cfg.RefillInterval)
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	err = server.ListenAndServe()
+	release()
+	if err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
 
-func newHandler(cfg config.Config, now func() time.Time) (http.Handler, error) {
-	store, err := newStore(cfg, now)
+func newHandler(cfg config.Config, now func() time.Time) (http.Handler, func(), error) {
+	store, stopEviction, err := newStore(cfg, now)
 	if err != nil {
-		return nil, err
+		return nil, func() {}, err
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			stopEviction()
+			closeStore(store)
+		})
 	}
 	limit := middleware.New(store, limiter.Policy{
 		Capacity:       cfg.Capacity,
 		RefillRate:     cfg.RefillRate,
 		RefillInterval: cfg.RefillInterval,
 	}, cfg.LimiterOnError == config.FailOpen, cfg.TrustedProxies, nil)
-	return api.NewMux(limit.Wrap(http.HandlerFunc(api.Resource))), nil
+	handler := api.NewMux(limit.Wrap(http.HandlerFunc(api.Resource)), api.Ready(store.Ping))
+	return handler, release, nil
 }
 
-func newStore(cfg config.Config, now func() time.Time) (storage.Store, error) {
+func newStore(cfg config.Config, now func() time.Time) (storage.Store, func(), error) {
 	switch cfg.StorageBackend {
 	case config.BackendMemory:
-		return storage.NewMemory(now), nil
+		mem := storage.NewMemory(now)
+		return mem, mem.StartEviction(cfg.MemoryIdle), nil
 	case config.BackendRedis:
-		return storage.NewRedis(storage.RedisConfig{
+		store, err := storage.NewRedis(storage.RedisConfig{
 			Addr:     cfg.RedisAddr,
 			Password: cfg.RedisPassword,
 			DB:       cfg.RedisDB,
 		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, func() {}, nil
 	default:
-		return nil, fmt.Errorf("STORAGE_BACKEND=%s is not available", cfg.StorageBackend)
+		return nil, nil, fmt.Errorf("STORAGE_BACKEND=%s is not available", cfg.StorageBackend)
+	}
+}
+
+func closeStore(store storage.Store) {
+	closer, ok := store.(io.Closer)
+	if !ok {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		log.Printf("close store: %v", err)
 	}
 }

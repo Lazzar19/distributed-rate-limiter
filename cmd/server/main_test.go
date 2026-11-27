@@ -12,7 +12,7 @@ import (
 
 func TestHandlerBurstAndHealth(t *testing.T) {
 	epoch := time.Unix(0, 0).UTC()
-	handler, err := newHandler(config.Config{
+	handler, release, err := newHandler(config.Config{
 		StorageBackend: config.BackendMemory,
 		LimiterOnError: config.FailClosed,
 		Capacity:       10,
@@ -22,6 +22,7 @@ func TestHandlerBurstAndHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newHandler: %v", err)
 	}
+	t.Cleanup(release)
 
 	for i := 1; i <= 10; i++ {
 		rec := request(handler, http.MethodGet, "/api/resource", "192.0.2.10:1")
@@ -50,6 +51,11 @@ func TestHandlerBurstAndHealth(t *testing.T) {
 		t.Fatal("health response includes rate-limit headers")
 	}
 
+	ready := request(handler, http.MethodGet, "/ready", "192.0.2.10:1")
+	if ready.Code != http.StatusOK || ready.Body.String() != "ok\n" {
+		t.Fatalf("ready status = %d body %q", ready.Code, ready.Body.String())
+	}
+
 	post := request(handler, http.MethodPost, "/api/resource", "198.51.100.21:9")
 	if post.Code == http.StatusOK {
 		t.Fatal("POST /api/resource returned 200")
@@ -57,7 +63,7 @@ func TestHandlerBurstAndHealth(t *testing.T) {
 }
 
 func TestNewHandlerRequiresRedisAddress(t *testing.T) {
-	_, err := newHandler(config.Config{StorageBackend: config.BackendRedis}, nil)
+	_, _, err := newHandler(config.Config{StorageBackend: config.BackendRedis}, nil)
 	if err == nil || !strings.Contains(err.Error(), "redis address") {
 		t.Fatalf("error = %v", err)
 	}

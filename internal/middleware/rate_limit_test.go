@@ -214,6 +214,10 @@ func (s *scriptedStore) Allow(context.Context, string, limiter.Policy) (limiter.
 	return s.decision, s.err
 }
 
+func (s *scriptedStore) Ping(context.Context) error {
+	return nil
+}
+
 func resource() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

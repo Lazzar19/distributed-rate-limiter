@@ -13,4 +13,6 @@ import (
 // A non-nil error means the store could not make a decision.
 type Store interface {
 	Allow(ctx context.Context, key string, policy limiter.Policy) (limiter.Decision, error)
+	// Ping reports whether the store can answer. Memory always can.
+	Ping(ctx context.Context) error
 }

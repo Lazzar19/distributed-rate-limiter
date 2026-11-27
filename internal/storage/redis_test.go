@@ -39,6 +39,9 @@ func TestRedisAllowReturnsConnectionError(t *testing.T) {
 	if decision.Allowed {
 		t.Fatal("connection error was returned as an allowed request")
 	}
+	if err := store.Ping(context.Background()); err == nil {
+		t.Fatal("Ping succeeded against a closed port")
+	}
 }
 
 func TestRedisCanceledContextDoesNotCallRedis(t *testing.T) {

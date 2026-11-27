@@ -144,6 +144,16 @@ func (r *Redis) Close() error {
 	return r.client.Close()
 }
 
+// Ping checks that Redis answers within the configured timeout.
+func (r *Redis) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	if err := r.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis: %w", err)
+	}
+	return nil
+}
+
 // Allow applies the policy to key. It takes the clock from Redis and bounds the call by the configured timeout.
 func (r *Redis) Allow(ctx context.Context, key string, policy limiter.Policy) (limiter.Decision, error) {
 	return r.allow(ctx, key, policy, nil)
