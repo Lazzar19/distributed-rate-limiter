@@ -17,8 +17,8 @@ HTTP request
 | `internal/limiter` | Policy, bucket state, and the pure `Advance` function |
 | `internal/storage` | `Allow` for the in-memory map and for Redis |
 | `internal/middleware` | Client address, 200 / 429 / 503, rate-limit headers |
-| `internal/api` | `GET /health` and the sample `GET /api/resource` |
-| `cmd/server` | Load configuration, choose the store, listen on `0.0.0.0` |
+| `internal/api` | `GET /health`, `GET /ready`, and the sample `GET /api/resource` |
+| `cmd/server` | Load configuration, choose the store, listen on `0.0.0.0`, stop on SIGTERM |
 | `cmd/loadgen` | Send a fixed set of clients and compare accepts with the formula |
 
 `Advance` does not import HTTP or Redis. The memory store calls it. The Lua script is a second copy of the same steps. The HTTP handlers do not know which store is in use.
@@ -54,6 +54,7 @@ The process listens on `0.0.0.0:$SERVER_PORT`.
 | Route | Behavior |
 | --- | --- |
 | `GET /health` | 200 when the process is up. It does not check Redis or consume a token. |
+| `GET /ready` | 200 when the store answers. 503 when Redis does not. It does not consume a token. |
 | `GET /api/resource` | Sample route behind the limiter. |
 
 | Result | HTTP | Headers |
@@ -77,7 +78,7 @@ API keys are not accepted. A new string would be a new bucket and would bypass t
 
 ## Storage
 
-The memory backend keeps one bucket per client. One mutex covers map lookup and insert. Each bucket has its own mutex, held across refill and save.
+The memory backend keeps one bucket per client. One mutex covers map lookup and insert. Each bucket has its own mutex, held across refill and save. One background sweep removes buckets that have not been used for `MEMORY_IDLE_TTL` (default 10m). A bucket whose lock is held is left for the next sweep. `MEMORY_IDLE_TTL=0` keeps every bucket until the process exits.
 
 The Redis backend stores each client as one hash (`tokens` and `last`) under the prefix `rl:`. Refill and consumption run in one Lua script. The script reads Redis `TIME`, so two machines with different clocks still agree. A missing key, or a timestamp that cannot be read, starts a full bucket. It is not treated as timestamp zero.
 
@@ -104,6 +105,7 @@ RATE_LIMIT_CAPACITY=10
 RATE_LIMIT_REFILL_RATE=2
 RATE_LIMIT_REFILL_INTERVAL=1s
 
+MEMORY_IDLE_TTL=10m
 TRUSTED_PROXIES=
 
 REDIS_ADDR=127.0.0.1:6379
@@ -124,6 +126,18 @@ STORAGE_BACKEND=redis REDIS_ADDR=127.0.0.1:6379 go run ./cmd/server
 ```
 
 Inside a container, `REDIS_ADDR` must be the Redis service name, not `localhost`. `localhost` is only for a server started on the host.
+
+`GET /health` answers 200 while the process is up. It does not contact Redis. `GET /ready` answers 200 when the store can answer and 503 when a Redis ping fails. The memory backend is always ready.
+
+SIGINT and SIGTERM stop the listener, stop the memory sweep, and close the Redis client. In-flight requests get up to 5 seconds to finish.
+
+Two processes and one Redis, from the repository root:
+
+```bash
+docker compose -f deployments/docker-compose.yml up --build
+```
+
+The instances listen on host ports 8081 and 8082. Both use `REDIS_ADDR=redis:6379` and the same policy. Redis is started with persistence off, so restarting the Redis container deletes every bucket. Restarting a limiter container does not. With Redis stopped, `GET /api/resource` returns 503 and `GET /health` still returns 200.
 
 ## Tests
 
