@@ -29,6 +29,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RefillInterval != time.Second {
 		t.Errorf("RefillInterval = %s, want 1s", cfg.RefillInterval)
 	}
+	if cfg.MemoryIdle != 10*time.Minute {
+		t.Errorf("MemoryIdle = %s, want 10m", cfg.MemoryIdle)
+	}
 	if cfg.RedisAddr != "" || cfg.RedisPassword != "" || cfg.RedisDB != 0 {
 		t.Errorf("redis defaults = addr %q password %q db %d", cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
 	}
@@ -84,6 +87,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{name: "redis addr missing", env: map[string]string{"STORAGE_BACKEND": "redis"}, want: "REDIS_ADDR"},
 		{name: "redis db", env: map[string]string{"REDIS_DB": "-1"}, want: "REDIS_DB"},
 		{name: "proxy", env: map[string]string{"TRUSTED_PROXIES": "not-an-ip"}, want: "TRUSTED_PROXIES"},
+		{name: "idle text", env: map[string]string{"MEMORY_IDLE_TTL": "soon"}, want: "MEMORY_IDLE_TTL"},
+		{name: "idle negative", env: map[string]string{"MEMORY_IDLE_TTL": "-1s"}, want: "MEMORY_IDLE_TTL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,6 +114,13 @@ func TestLoadAllowsEmptyPasswordAndMemoryWithoutRedis(t *testing.T) {
 	}
 	if cfg.StorageBackend != BackendMemory || cfg.RedisAddr != "" || cfg.RedisPassword != "" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+	off, err := load(mapLookup(map[string]string{"MEMORY_IDLE_TTL": "0"}))
+	if err != nil {
+		t.Fatalf("load idle 0: %v", err)
+	}
+	if off.MemoryIdle != 0 {
+		t.Fatalf("MemoryIdle = %s, want 0", off.MemoryIdle)
 	}
 }
 

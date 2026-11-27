@@ -28,6 +28,7 @@ const (
 	defaultCapacity       = 10.0
 	defaultRefillRate     = 2.0
 	defaultRefillInterval = time.Second
+	defaultMemoryIdle     = 10 * time.Minute
 )
 
 // Config is the validated process configuration.
@@ -42,6 +43,8 @@ type Config struct {
 	RedisAddr      string
 	RedisPassword  string
 	RedisDB        int
+	// MemoryIdle is how long an unused in-memory bucket stays. Zero disables eviction.
+	MemoryIdle time.Duration
 }
 
 // Load reads configuration from the environment.
@@ -75,6 +78,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 	cfg.RefillInterval, err = parseInterval(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.MemoryIdle, err = parseIdle(lookup)
 	if err != nil {
 		return Config{}, err
 	}
@@ -175,6 +182,24 @@ func parseInterval(lookup func(string) (string, bool)) (time.Duration, error) {
 		return 0, fmt.Errorf("RATE_LIMIT_REFILL_INTERVAL must be greater than 0")
 	}
 	return interval, nil
+}
+
+func parseIdle(lookup func(string) (string, bool)) (time.Duration, error) {
+	raw, set, err := optional(lookup, "MEMORY_IDLE_TTL")
+	if err != nil {
+		return 0, err
+	}
+	if !set {
+		return defaultMemoryIdle, nil
+	}
+	idle, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("MEMORY_IDLE_TTL is not a valid duration")
+	}
+	if idle < 0 {
+		return 0, fmt.Errorf("MEMORY_IDLE_TTL must be zero or positive")
+	}
+	return idle, nil
 }
 
 func parseProxies(lookup func(string) (string, bool)) ([]string, error) {

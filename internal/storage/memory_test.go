@@ -234,6 +234,62 @@ func TestMemoryCanceledContextDoesNotConsume(t *testing.T) {
 	assertDecision(t, next, true, 8, 0)
 }
 
+func TestMemoryEvictsIdleBucket(t *testing.T) {
+	epoch := time.Unix(0, 0).UTC()
+	clock := epoch
+	store := NewMemory(func() time.Time { return clock })
+	store.idle = time.Minute
+	policy := limiter.Policy{Capacity: 10, RefillRate: 1, RefillInterval: time.Hour}
+
+	first, err := store.Allow(context.Background(), "idle", policy)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	assertDecision(t, first, true, 9, 0)
+
+	clock = epoch.Add(30 * time.Second)
+	store.sweep(clock)
+	kept, err := store.Allow(context.Background(), "idle", policy)
+	if err != nil {
+		t.Fatalf("Allow kept: %v", err)
+	}
+	assertDecision(t, kept, true, 8, 0)
+
+	clock = epoch.Add(90 * time.Second)
+	_, err = store.Allow(context.Background(), "busy", policy)
+	if err != nil {
+		t.Fatalf("Allow busy: %v", err)
+	}
+	store.sweep(clock)
+	fresh, err := store.Allow(context.Background(), "idle", policy)
+	if err != nil {
+		t.Fatalf("Allow fresh: %v", err)
+	}
+	assertDecision(t, fresh, true, 9, 0)
+
+	still, err := store.Allow(context.Background(), "busy", policy)
+	if err != nil {
+		t.Fatalf("Allow busy after sweep: %v", err)
+	}
+	assertDecision(t, still, true, 8, 0)
+}
+
+func TestMemorySweepSkipsBucketInUse(t *testing.T) {
+	epoch := time.Unix(0, 0).UTC()
+	store := NewMemory(func() time.Time { return epoch })
+	store.idle = time.Second
+	policy := samplePolicy()
+	b := store.loadOrCreate("held", epoch, policy)
+	b.mu.Lock()
+	b.lastUsed = epoch
+	store.sweep(epoch.Add(time.Hour))
+	b.mu.Unlock()
+
+	if _, ok := store.buckets["held"]; !ok {
+		t.Fatal("sweep removed a bucket whose lock was held")
+	}
+}
+
 func drain(t *testing.T, store *Memory, key string, policy limiter.Policy, n int) {
 	t.Helper()
 	for i := range n {
