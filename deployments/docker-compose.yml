@@ -1,0 +1,47 @@
+# Two limiter processes share one Redis.
+# Redis persistence is off. Restarting Redis deletes every bucket.
+# Restarting a limiter process does not.
+
+services:
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  limiter-1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      SERVER_PORT: "8080"
+      STORAGE_BACKEND: redis
+      REDIS_ADDR: redis:6379
+      LIMITER_ON_ERROR: fail_closed
+    ports:
+      - "8081:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  limiter-2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      SERVER_PORT: "8080"
+      STORAGE_BACKEND: redis
+      REDIS_ADDR: redis:6379
+      LIMITER_ON_ERROR: fail_closed
+    ports:
+      - "8082:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
